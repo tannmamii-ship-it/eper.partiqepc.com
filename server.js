@@ -9,9 +9,9 @@ const TARGET_URL = process.env.TARGET_URL || 'https://eper.autocore360.com';
 const FIAT_FAVICON = 'https://eper.parts.fiat.com/favicon.ico';
 
 let authCookies = '';
-let isAuthenticating = false;
+let authPromise = null;
 
-// Özel Fiat Favicon Yönlendirmesi
+// Fiat Favicon Yönlendirmesi
 app.get('/favicon.ico', async (req, res) => {
   try {
     const response = await fetch(FIAT_FAVICON);
@@ -23,11 +23,9 @@ app.get('/favicon.ico', async (req, res) => {
   }
 });
 
+// Bot Giriş Fonksiyonu
 async function loginAndGetCookies() {
-  if (isAuthenticating) return;
-  isAuthenticating = true;
-  console.log('[BOT] Otomatik giriş deneniyor...');
-
+  console.log('[BOT] Otomatik giriş işlemi başlatıldı...');
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -47,7 +45,7 @@ async function loginAndGetCookies() {
     const page = await browser.newPage();
     await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36');
 
-    await page.goto(TARGET_URL, { waitUntil: 'domcontentloaded', timeout: 60000 });
+    await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
     const userInput = await page.waitForSelector('input[name="username"], #eper-user', { timeout: 20000 });
     const passInput = await page.waitForSelector('input[name="password"], #eper-pass', { timeout: 20000 });
@@ -59,7 +57,7 @@ async function loginAndGetCookies() {
     if (loginBtn) {
       await Promise.all([
         loginBtn.click(),
-        page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }).catch(() => {})
+        page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {})
       ]);
     } else {
       await page.keyboard.press('Enter');
@@ -74,16 +72,31 @@ async function loginAndGetCookies() {
     console.error('[BOT HATA]:', error.message);
   } finally {
     if (browser) await browser.close();
-    isAuthenticating = false;
   }
 }
 
-app.use('/', async (req, res, next) => {
-  if (!authCookies && !isAuthenticating) {
-    await loginAndGetCookies();
+// Oturum Alınana Kadar İstekleri Bekleten Kilit Mekanizması
+async function ensureAuthenticated() {
+  if (authCookies) return;
+  if (!authPromise) {
+    authPromise = loginAndGetCookies().finally(() => {
+      authPromise = null;
+    });
   }
+  await authPromise;
+}
+
+// Middleware: Oturum Bekleme
+app.use(async (req, res, next) => {
+  if (req.path === '/favicon.ico') {
+    return next();
+  }
+  await ensureAuthenticated();
   next();
-}, createProxyMiddleware({
+});
+
+// Ters Proxy
+app.use('/', createProxyMiddleware({
   target: TARGET_URL,
   changeOrigin: true,
   on: {
@@ -98,5 +111,5 @@ app.use('/', async (req, res, next) => {
 
 app.listen(PORT, () => {
   console.log(`[SUNUCU] Aktif: Port ${PORT}`);
-  loginAndGetCookies();
+  ensureAuthenticated();
 });
