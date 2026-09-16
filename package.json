@@ -1,14 +1,16 @@
 {
   "name": "eper-proxy",
   "version": "1.0.0",
+  "description": "ePER Proxy Service",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js"
+    "start": "node server.js",
+    "postinstall": "npx puppeteer browsers install chrome"
   },
   "dependencies": {
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "http-proxy-middleware": "^3.0.0",
-    "puppeteer": "^22.10.0"
+    "puppeteer": "^22.12.1"
   }
 }
