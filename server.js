@@ -10,9 +10,10 @@ const FIAT_FAVICON = 'https://eper.parts.fiat.com/favicon.ico';
 const USER_AGENT = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36';
 
 let authCookies = '';
+let rawCookies = [];
 let authPromise = null;
 
-// Fiat Favicon Yönlendirmesi
+// Fiat Favicon
 app.get('/favicon.ico', async (req, res) => {
   try {
     const response = await fetch(FIAT_FAVICON);
@@ -24,9 +25,8 @@ app.get('/favicon.ico', async (req, res) => {
   }
 });
 
-// Bot Giriş Fonksiyonu
 async function loginAndGetCookies() {
-  console.log('[BOT] Otomatik giriş işlemi başlatıldı...');
+  console.log('[BOT] Otomatik giriş işlemi başlatılıyor...');
   let browser;
   try {
     browser = await puppeteer.launch({
@@ -48,32 +48,25 @@ async function loginAndGetCookies() {
 
     await page.goto(TARGET_URL, { waitUntil: 'networkidle2', timeout: 60000 });
 
-    const userInput = await page.waitForSelector('input[name="username"], #eper-user', { timeout: 20000 });
-    const passInput = await page.waitForSelector('input[name="password"], #eper-pass', { timeout: 20000 });
+    // Birebir belirtilen HTML elemanları bekleniyor
+    await page.waitForSelector('#eper-user', { timeout: 20000 });
+    await page.waitForSelector('#eper-pass', { timeout: 20000 });
 
-    await userInput.type(process.env.EPER_USER || 'mtan0', { delay: 30 });
-    await passInput.type(process.env.EPER_PASS || '0326Aoyp', { delay: 30 });
+    // Verilen kullanıcı adı ve şifre yazılıyor
+    await page.type('#eper-user', process.env.EPER_USER || 'otoford', { delay: 50 });
+    await page.type('#eper-pass', process.env.EPER_PASS || '2478mertser', { delay: 50 });
 
-    const loginBtn = await page.$('.btn-login, button[type="submit"], input[type="submit"]');
-    if (loginBtn) {
-      await loginBtn.click();
-    } else {
-      await page.keyboard.press('Enter');
-    }
+    // Login butonuna tıklanıyor
+    await page.click('.btn-login');
 
-    // Giriş formunun ekrandan kaybolmasını bekle
-    await page.waitForFunction(
-      () => !document.querySelector('input[name="username"]') && !document.querySelector('input[type="password"]'),
-      { timeout: 30000 }
-    ).catch(() => console.log('[BOT] Yönlendirme bekleniyor...'));
+    // Yönlendirme ve oturum onayının tamamlanması bekleniyor
+    await page.waitForNavigation({ waitUntil: 'networkidle2', timeout: 30000 }).catch(() => {});
+    await new Promise(r => setTimeout(r, 4000));
 
-    // Çerezlerin sunucu tarafından tam işlenmesi için kısa bekleme
-    await new Promise(r => setTimeout(r, 3000));
-
-    const cookies = await page.cookies();
-    if (cookies.length > 0) {
-      authCookies = cookies.map(c => `${c.name}=${c.value}`).join('; ');
-      console.log('[BOT BAŞARILI] Oturum çerezleri alındı! Toplam çerez:', cookies.length);
+    rawCookies = await page.cookies();
+    if (rawCookies.length > 0) {
+      authCookies = rawCookies.map(c => `${c.name}=${c.value}`).join('; ');
+      console.log('[BOT BAŞARILI] Giriş tamamlandı. Toplam çerez sayısı:', rawCookies.length);
     } else {
       console.error('[BOT HATA]: Çerez toplanamadı.');
     }
@@ -84,7 +77,6 @@ async function loginAndGetCookies() {
   }
 }
 
-// Oturum Alınana Kadar İstekleri Bekleten Kilit Mekanizması
 async function ensureAuthenticated() {
   if (authCookies) return;
   if (!authPromise) {
@@ -95,27 +87,31 @@ async function ensureAuthenticated() {
   await authPromise;
 }
 
-// Middleware: Oturum Bekleme
 app.use(async (req, res, next) => {
-  if (req.path === '/favicon.ico') {
-    return next();
-  }
+  if (req.path === '/favicon.ico') return next();
   await ensureAuthenticated();
   next();
 });
 
-// Ters Proxy
 app.use('/', createProxyMiddleware({
   target: TARGET_URL,
   changeOrigin: true,
-  cookieDomainRewrite: "",
+  autoRewrite: true,
+  followRedirects: true,
   on: {
     proxyReq: (proxyReq) => {
       if (authCookies) {
         proxyReq.setHeader('Cookie', authCookies);
       }
       proxyReq.setHeader('User-Agent', USER_AGENT);
-      proxyReq.setHeader('Host', new URL(TARGET_URL).host);
+      proxyReq.setHeader('Origin', TARGET_URL);
+      proxyReq.setHeader('Referer', `${TARGET_URL}/`);
+    },
+    proxyRes: (proxyRes, req, res) => {
+      if (rawCookies && rawCookies.length > 0) {
+        const setCookieHeaders = rawCookies.map(c => `${c.name}=${c.value}; Path=/; SameSite=Lax`);
+        res.setHeader('Set-Cookie', setCookieHeaders);
+      }
     }
   }
 }));
